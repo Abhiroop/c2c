@@ -1,11 +1,18 @@
+{-# LANGUAGE NamedFieldPuns #-}
+{-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 module STG where
 
-import qualified Data.Map as M
+import Utils
+
+import qualified Data.Map.Strict as M
 
 {- Order of implemention
 1. Implementing Lazy Functional Languages on Stock Hardware - SPJ - describes the original STG machine
 2. Dynamic Pointer Tagging - https://simonmar.github.io/bib/papers/ptr-tagging.pdf - changes the "tagless" aspect of STG
 3. Push/enter vs eval/apply - https://www.microsoft.com/en-us/research/uploads/prod/2016/07/eval-apply-icfp.pdf - changes the notion of function application
+4. Not implemented in GHC - Putting the spine back in STG - https://alastairreid.github.io/papers/spine-ifl98.pdf
+
+
 
 The first paper does
 
@@ -39,7 +46,7 @@ STG             --> CHERI
 
 -}
 
-type Prog = Binds
+type Program = Binds
 
 type Var = String -- "var1, var2,...,varn"
 
@@ -101,3 +108,117 @@ Case expr <==> Evaluation
 Constructor application <==> Return to continuation
 
 -}
+
+-- | A memory address.
+newtype MemAddr = MemAddr Int
+    deriving (Show, Eq, Ord)
+
+-- | The possible values of the STG machine
+--   These tags are not present in actual implementations.
+data Value = Addr MemAddr | PrimInt Integer deriving (Show, Eq)
+
+
+-- | The STG representation of a closure
+--   (vs \π xs -> e) ws
+--   where ws gives the value of each free variable
+data Closure = Closure LambdaForm [Value] deriving (Show, Eq)
+
+data STGState =
+     STGState { stgCode        :: Code
+              , stgArgStack    :: Stack Value -- argument stack
+              , stgReturnStack :: Stack Continuation -- return stack
+              , stgUpdateStack :: Stack UpdateFrame  -- update stack
+              , stgHeap        :: Heap
+              , stgGlobalEnv   :: Globals
+              }
+              deriving (Show, Eq)
+
+-- | STG Code state
+data Code =
+    -- | Evaluate an expression in a local environment and apply
+    --   its value to the arguments on the argument stack
+    Eval Expr Locals
+
+    -- | Apply the closure at `MemAddr` to the arguments on argument stack
+  | Enter MemAddr
+
+    -- | Return the constructor applied to the values to the continuation
+    --   on the return stack
+  | ReturnCon Constr [Value]
+
+    -- | Return the primitive integer to the continuation on the return stack
+  | ReturnInt Integer
+  deriving (Show, Eq)
+
+-- | The STG Heap
+type Heap = M.Map MemAddr Closure
+
+-- | STG globals
+--   mapping from variables at the top level to the address of
+--   top-level closures; Note that the top-level closures is updatable
+--   The address of the globals should not change during execution
+type Globals = M.Map Var Value
+
+data Continuation -- not yet defined
+  =  Cont deriving (Show, Eq)
+
+data UpdateFrame  -- not yet defined
+  =  UpdateFrame deriving (Show, Eq)
+
+-- | Local environment
+--   maps local definitions to their respective values
+type Locals = M.Map Var Value
+
+val :: Locals -> Globals -> Atom -> Maybe Value
+val locals globals (Lit literal) =
+  pure $ PrimInt literal
+val locals globals (Var var) = do
+  case (M.lookup var locals) of
+    Just v  -> Just v
+    Nothing ->
+      case (M.lookup var globals) of
+        Just v_ -> Just v_
+        Nothing -> Nothing
+
+initSTGState :: Program -> Either STGErr STGState
+initSTGState program =
+  case M.lookup "main" program of
+    Nothing -> Left MainNotFound
+    Just (LambdaForm _ updflag _ mainExpr) -> Right $
+      STGState { stgCode        = code
+               , stgArgStack    = initStack
+               , stgReturnStack = initStack
+               , stgUpdateStack = initStack
+               , stgHeap        = heap
+               , stgGlobalEnv   = globals
+               }
+      where
+        {- Construct the CODE component -}
+        code = Eval mainExpr M.empty
+        bindsList = M.toList program
+        {- Allocate closure on heap without pointing
+           to the free variables that are globals -}
+        heapList = zip (map MemAddr [0..])
+                   (map ((\lf -> Closure lf []) . snd) bindsList)
+        {- Construct the global environment using the heapList above -}
+        heapAddrs = map (Addr . fst) heapList :: [Value]
+        globals   = M.fromList $ zip (map fst bindsList) heapAddrs
+        {- Mutate the heap to point to location of the free variables
+           that occur as globals and this is the final heap -}
+        heap = M.fromList $ map updClosure heapList
+        updClosure :: (MemAddr, Closure) -> (MemAddr, Closure)
+        updClosure (maddr, (Closure lf@(LambdaForm freevars _ _ _) _))
+          = (maddr, cls')
+          where
+            cls' = Closure lf freevars'
+            freevars' = map (\fv -> case M.lookup fv globals of
+                                      Just v -> v
+                                      Nothing ->
+                                        error "Unbound free variable while\
+                                               \constructing initial STG state"
+                            ) freevars
+
+data STGErr = MainNotFound
+
+instance Show STGErr where
+  show MainNotFound = "STGErr : Missing main function!"
