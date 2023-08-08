@@ -46,6 +46,14 @@ STG             --> CHERI
 
 -}
 
+{- Similar projects:
+
+https://github.com/quchen/stgi
+https://github.com/bjpop/ministg
+
+
+-}
+
 type Program = Binds
 
 type Var = String -- "var1, var2,...,varn"
@@ -180,11 +188,11 @@ val locals globals (Var var) = do
         Just v_ -> Just v_
         Nothing -> Nothing
 
-initSTGState :: Program -> Either STGErr STGState
+initSTGState :: Program -> STGState
 initSTGState program =
   case M.lookup "main" program of
-    Nothing -> Left MainNotFound
-    Just (LambdaForm _ updflag _ mainExpr) -> Right $
+    Nothing -> error "STGErr : Missing main function!"
+    Just (LambdaForm _ updflag _ mainExpr) ->
       STGState { stgCode        = code
                , stgArgStack    = initStack
                , stgReturnStack = initStack
@@ -214,11 +222,75 @@ initSTGState program =
             freevars' = map (\fv -> case M.lookup fv globals of
                                       Just v -> v
                                       Nothing ->
-                                        error "Unbound free variable while\
-                                               \constructing initial STG state"
+                                        error "STGErr : Unbound free variable \
+                                               \while constructing initial STG \
+                                               \state"
                             ) freevars
 
-data STGErr = MainNotFound
+--------------------- STATE TRANSITION RULES --------------------
 
-instance Show STGErr where
-  show MainNotFound = "STGErr : Missing main function!"
+rule_1_funcApp :: STGState -> Maybe STGState
+rule_1_funcApp s@(STGState { stgCode = Eval (AppF f xs) locals
+                           , stgArgStack  = argStack
+                           , stgGlobalEnv = globals
+                           }) = do
+  (Addr a) <- val locals globals (Var f)
+  args     <- traverse (val locals globals) xs
+  Just $ s { stgCode = Enter a
+           , stgArgStack = args >>: argStack
+           }
+rule_1_funcApp _ = Nothing
+
+rule_2_enterNonUpdatable :: STGState -> Maybe STGState
+rule_2_enterNonUpdatable s@(STGState { stgCode = Enter a
+                                     , stgArgStack = argStack
+                                     , stgHeap = heap
+                                     }) = do
+  Closure (LambdaForm vs NotUpdatable xs e) ws_free <- M.lookup a heap
+  let freeLocals  = zip vs ws_free
+  let boundLocals = zip xs argStack -- zip chooses the smallest list; according to the semantics
+                                    -- length (argStack) >= length xs so this should be fine
+  let locals = M.fromList $ freeLocals ++ boundLocals
+  let as' = drop (length xs) argStack
+  Just $ s { stgCode = Eval e locals
+           , stgArgStack = as'
+           }
+rule_2_enterNonUpdatable _ = Nothing
+
+-- The only difference between `let` and `letrec` is in which
+-- environment the variables are looked up; `locals` for `let`
+-- and `locals'` for `letrec` to account for the mutual recursion
+rule_3_let :: STGState -> Maybe STGState
+rule_3_let s@(STGState { stgCode = Eval (Let binds e) locals
+                       , stgHeap = heap
+                       }) = do
+  let bindslist = M.toList binds
+  let boundVars = map fst bindslist
+  let (MemAddr maxaddr) = fst (M.findMax heap)
+  let addrs = map MemAddr [(maxaddr + 1) .. (maxaddr + 1 + length bindslist)]
+  let locals' = insertMany (zip boundVars (map Addr addrs)) locals
+  let lambdaforms = map snd bindslist
+  newClosures <- traverse (\lf@(LambdaForm vs _ _ _) -> do
+                              freevarvals <- traverse (flip M.lookup locals) vs
+                              Just $ Closure lf freevarvals) lambdaforms
+  let heap' = insertMany (zip addrs newClosures) heap
+  Just $ s { stgCode = Eval e locals'
+           , stgHeap = heap'
+           }
+rule_3_let s@(STGState { stgCode = Eval (LetRec binds e) locals
+                       , stgHeap = heap
+                       }) = do
+  let bindslist = M.toList binds
+  let boundVars = map fst bindslist
+  let (MemAddr maxaddr) = fst (M.findMax heap)
+  let addrs = map MemAddr [(maxaddr + 1) .. (maxaddr + 1 + length bindslist)]
+  let locals' = insertMany (zip boundVars (map Addr addrs)) locals
+  let lambdaforms = map snd bindslist
+  newClosures <- traverse (\lf@(LambdaForm vs _ _ _) -> do
+                              freevarvals <- traverse (flip M.lookup locals') vs
+                              Just $ Closure lf freevarvals) lambdaforms
+  let heap' = insertMany (zip addrs newClosures) heap
+  Just $ s { stgCode = Eval e locals'
+           , stgHeap = heap'
+           }
+rule_3_let _ = Nothing
