@@ -4,6 +4,7 @@ module STG where
 
 import Utils
 
+import qualified Data.List as L
 import qualified Data.Map.Strict as M
 
 {- Order of implemention
@@ -86,7 +87,7 @@ data Expr = Let    Binds  Expr
           | LetRec Binds  Expr
           | AppF   Var    [Atom]
           | AppC   Constr [Atom]
-          | AppP   PrimOp [Atom]
+          | AppP   PrimOp Atom Atom
           | Case   Expr  Alts
           | LitE   Literal
           deriving (Show, Eq)
@@ -167,8 +168,7 @@ type Heap = M.Map MemAddr Closure
 --   The address of the globals should not change during execution
 type Globals = M.Map Var Value
 
-data Continuation -- not yet defined
-  =  Cont deriving (Show, Eq)
+type Continuation = (Alts, Locals)
 
 data UpdateFrame  -- not yet defined
   =  UpdateFrame deriving (Show, Eq)
@@ -227,6 +227,11 @@ initSTGState program =
                                                \state"
                             ) freevars
 
+malloc :: Heap -> MemAddr
+malloc h = MemAddr (maddr + 1)
+  where
+    (MemAddr maddr) = fst (M.findMax h)
+
 --------------------- STATE TRANSITION RULES --------------------
 
 rule_1_funcApp :: STGState -> Maybe STGState
@@ -266,8 +271,8 @@ rule_3_let s@(STGState { stgCode = Eval (Let binds e) locals
                        }) = do
   let bindslist = M.toList binds
   let boundVars = map fst bindslist
-  let (MemAddr maxaddr) = fst (M.findMax heap)
-  let addrs = map MemAddr [(maxaddr + 1) .. (maxaddr + 1 + length bindslist)]
+  let (MemAddr newaddr) = malloc heap
+  let addrs = map MemAddr [newaddr .. (newaddr + length bindslist)]
   let locals' = insertMany (zip boundVars (map Addr addrs)) locals
   let lambdaforms = map snd bindslist
   newClosures <- traverse (\lf@(LambdaForm vs _ _ _) -> do
@@ -282,8 +287,8 @@ rule_3_let s@(STGState { stgCode = Eval (LetRec binds e) locals
                        }) = do
   let bindslist = M.toList binds
   let boundVars = map fst bindslist
-  let (MemAddr maxaddr) = fst (M.findMax heap)
-  let addrs = map MemAddr [(maxaddr + 1) .. (maxaddr + 1 + length bindslist)]
+  let (MemAddr newaddr) = malloc heap
+  let addrs = map MemAddr [newaddr .. (newaddr + length bindslist)]
   let locals' = insertMany (zip boundVars (map Addr addrs)) locals
   let lambdaforms = map snd bindslist
   newClosures <- traverse (\lf@(LambdaForm vs _ _ _) -> do
@@ -294,3 +299,125 @@ rule_3_let s@(STGState { stgCode = Eval (LetRec binds e) locals
            , stgHeap = heap'
            }
 rule_3_let _ = Nothing
+
+rule_4_case :: STGState -> Maybe STGState
+rule_4_case s@(STGState { stgCode = Eval (Case e alts) locals
+                        , stgReturnStack = rs
+                        }) =
+  Just $ s { stgCode = Eval e locals
+           , stgReturnStack = (alts, locals) >: rs
+           }
+rule_4_case _ = Nothing
+
+rule_5_constructorApp :: STGState -> Maybe STGState
+rule_5_constructorApp s@(STGState { stgCode = Eval (AppC c xs) locals
+                                  , stgGlobalEnv = globals
+                                  }) = do
+  constr_args <- traverse (val locals globals) xs
+  Just $ s { stgCode = ReturnCon c constr_args }
+rule_5_constructorApp _ = Nothing
+
+
+-- This function handles rules 6, 7 and 8 as three case branches
+rule_6_7_8_algebraicMatch :: STGState -> Maybe STGState
+rule_6_7_8_algebraicMatch s@(STGState { stgCode = ReturnCon c ws
+                                      , stgReturnStack = (alts,locals):rs
+                                      , stgHeap = heap
+                                      }) = do
+  alg_or_def_alt <- lookupAlgebraicAlt alts c
+  case alg_or_def_alt of
+    {- RULE 6 -}
+    Right (AlgAlt _ vs e) -> do
+      let locals' = insertMany (zip vs ws) locals
+      Just $ s { stgCode = Eval e locals'
+               , stgReturnStack = rs
+               }
+    {- RULE 7 -}
+    Left (DefaultNotBound e_d) ->
+      Just $ s { stgCode = Eval e_d locals
+               , stgReturnStack = rs
+               }
+    {- RULE 8 -}
+    Left (DefaultBound v e_d) -> do
+      let maddr = malloc heap
+      let locals' = M.insert v (Addr maddr) locals
+      let vs = map (\i -> "rule_8_" <> show i) (take (length ws) [1..])
+      let clos = Closure (LambdaForm vs NotUpdatable [] (AppC c (map Var vs))) ws
+      let heap' = M.insert maddr clos heap
+      Just $ s { stgCode = Eval e_d locals'
+               , stgReturnStack = rs
+               , stgHeap = heap'
+               }
+rule_6_7_8_algebraicMatch _ = Nothing
+
+lookupAlgebraicAlt :: Alts -> Constr -> Maybe (Either DefaultAlt AlgAlt)
+lookupAlgebraicAlt (AlgAlts alts def) c =
+  case (L.find (\(AlgAlt constr _ _) -> constr == c) alts) of
+    Just a  -> Just (Right a)
+    Nothing -> Just (Left def)
+lookupAlgebraicAlt (PrimAlts _ _) _ = Nothing
+
+rule_9_primitiveLiteralEval :: STGState -> Maybe STGState
+rule_9_primitiveLiteralEval s@(STGState { stgCode = Eval (LitE k) locals }) = do
+  Just $ s { stgCode = ReturnInt k }
+rule_9_primitiveLiteralEval _ = Nothing
+
+rule_10_primitiveLiteralApp :: STGState -> Maybe STGState
+rule_10_primitiveLiteralApp s@(STGState { stgCode = Eval (AppF f []) locals }) = do
+  (PrimInt k) <- M.lookup f locals
+  Just $ s { stgCode = ReturnInt k }
+rule_10_primitiveLiteralApp _ = Nothing
+
+-- This function handles rules 11, 12 and 13 as three case branches
+rule_11_12_13_primitiveMatch :: STGState -> Maybe STGState
+rule_11_12_13_primitiveMatch s@(STGState { stgCode = ReturnInt k
+                                         , stgReturnStack = (alts, locals):rs
+                                         }) = do
+  prim_or_def_alt <- lookupPrimitiveAlt alts k
+  case prim_or_def_alt of
+    {- RULE 11 -}
+    Right (PrimAlt _ e) ->
+      Just $ s { stgCode = Eval e locals
+               , stgReturnStack = rs
+               }
+    {- RULE 12 -}
+    Left (DefaultBound x e) -> do
+      let locals' = M.insert x (PrimInt k) locals
+      Just $ s { stgCode = Eval e locals'
+               , stgReturnStack = rs
+               }
+    {- RULE 13 -}
+    Left (DefaultNotBound e) ->
+      Just $ s { stgCode = Eval e locals
+               , stgReturnStack = rs
+               }
+
+rule_11_12_13_primitiveMatch _ = Nothing
+
+lookupPrimitiveAlt :: Alts -> Literal -> Maybe (Either DefaultAlt PrimAlt)
+lookupPrimitiveAlt (PrimAlts alts def) k =
+  case (L.find (\(PrimAlt l _) -> l == k) alts) of
+    Just a  -> Just (Right a)
+    Nothing -> Just (Left def)
+lookupPrimitiveAlt (AlgAlts _ _) _ = Nothing
+
+-- extended rule 14 that can handle all four combinations of
+-- var `op` var
+-- lit `op` lit
+-- var `op` lit
+-- lit `op` var
+rule_14_primop :: STGState -> Maybe STGState
+rule_14_primop s@(STGState { stgCode = Eval (AppP op x1 x2) locals }) = do
+  (PrimInt i1) <- case x1 of
+                    Var v1  -> M.lookup v1 locals
+                    Lit l1 -> Just (PrimInt l1)
+  (PrimInt i2) <- case x2 of
+                    Var v2  -> M.lookup v2 locals
+                    Lit l2 -> Just (PrimInt l2)
+  let res = case op of
+              PlusOp  -> i1 + i2
+              MinusOp -> i1 - i2
+              MulOp   -> i1 - i2
+              DivOp   -> i1 `div` i2
+  Just $ s { stgCode = ReturnInt res }
+rule_14_primop _ = Nothing
