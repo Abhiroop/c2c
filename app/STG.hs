@@ -170,8 +170,7 @@ type Globals = M.Map Var Value
 
 type Continuation = (Alts, Locals)
 
-data UpdateFrame  -- not yet defined
-  =  UpdateFrame deriving (Show, Eq)
+type UpdateFrame = (Stack Value, Stack Continuation, MemAddr)
 
 -- | Local environment
 --   maps local definitions to their respective values
@@ -421,3 +420,65 @@ rule_14_primop s@(STGState { stgCode = Eval (AppP op x1 x2) locals }) = do
               DivOp   -> i1 `div` i2
   Just $ s { stgCode = ReturnInt res }
 rule_14_primop _ = Nothing
+
+rule_15_enterUpdatable :: STGState -> Maybe STGState
+rule_15_enterUpdatable s@(STGState { stgCode = Enter a
+                                   , stgArgStack = argStack
+                                   , stgReturnStack = returnStack
+                                   , stgUpdateStack = updStack
+                                   , stgHeap = heap
+                                   }) = do
+  Closure (LambdaForm vs Updatable [] e) ws_free <- M.lookup a heap
+  let locals = M.fromList $ zip vs ws_free
+  Just $ s { stgCode        = Eval e locals
+           , stgArgStack    = initStack
+           , stgReturnStack = initStack
+           , stgUpdateStack = (argStack, returnStack, a) >: updStack
+           }
+rule_15_enterUpdatable _ = Nothing
+
+-- Contrast this with rule_6_7_8 where the return stack is not empty
+-- Now upon finding the empty return stack it sets the update flag
+rule_16_missingReturnUpdate :: STGState -> Maybe STGState
+rule_16_missingReturnUpdate s@(STGState { stgCode = ReturnCon c ws
+                                        , stgArgStack = []
+                                        , stgReturnStack = []
+                                        , stgUpdateStack = (as_u, rs_u, a_u):updStack
+                                        , stgHeap = heap
+                                   }) = do
+  let vs = map (\i -> "rule_16_" <> show i) (take (length ws) [1..])
+  let clos = Closure (LambdaForm vs NotUpdatable [] (AppC c (map Var vs))) ws
+  let heap' = M.insert a_u clos heap -- mutating the heap (a_u already present)
+  Just $ s { stgCode = ReturnCon c ws
+           , stgArgStack = as_u
+           , stgReturnStack = rs_u
+           , stgUpdateStack = updStack
+           , stgHeap = heap'
+           }
+rule_16_missingReturnUpdate _ = Nothing
+
+rule_17a_missingArgUpdate :: STGState -> Maybe STGState
+rule_17a_missingArgUpdate s@(STGState { stgCode = Enter a
+                                      , stgArgStack = argStack
+                                      , stgReturnStack = []
+                                      , stgUpdateStack = (as_u, rs_u, a_u):updStack
+                                      , stgHeap = heap
+                                      }) = do
+  (Closure (LambdaForm vs NotUpdatable xs e) ws_free) <- M.lookup a heap
+  if (length argStack < length xs)
+  then do
+    let xs_1 = take (length argStack) xs
+    -- let xs_2 = drop (length argStack) xs
+    -- XXX: using the length of the heap to simulate randomness
+    let f = "rule_17a_" <> show (length (M.toList heap))
+    let clos = Closure (LambdaForm (f:xs_1) NotUpdatable []
+                         (AppF f (map Var xs_1))) ((Addr a):argStack)
+    let heap' = M.insert a_u clos heap
+    Just $ s { stgCode = Enter a
+             , stgArgStack = argStack ++ as_u
+             , stgReturnStack = rs_u
+             , stgUpdateStack = updStack
+             , stgHeap = heap'
+             }
+  else Nothing
+rule_17a_missingArgUpdate _ = Nothing
