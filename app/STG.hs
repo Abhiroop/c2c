@@ -2,6 +2,7 @@
 {-# OPTIONS_GHC -fwarn-incomplete-patterns #-}
 module STG where
 
+import Data.Foldable (asum)
 import Utils
 
 import qualified Data.List as L
@@ -92,8 +93,8 @@ data Expr = Let    Binds  Expr
           | LitE   Literal
           deriving (Show, Eq)
 
-data Alts = AlgAlts  [AlgAlt]  DefaultAlt
-          | PrimAlts [PrimAlt] DefaultAlt
+data Alts = AlgAlts  [AlgAlt]  (Maybe DefaultAlt)
+          | PrimAlts [PrimAlt] (Maybe DefaultAlt)
           deriving (Show, Eq)
 
 data AlgAlt = AlgAlt Constr [Var] Expr deriving (Show, Eq)
@@ -353,7 +354,9 @@ lookupAlgebraicAlt :: Alts -> Constr -> Maybe (Either DefaultAlt AlgAlt)
 lookupAlgebraicAlt (AlgAlts alts def) c =
   case (L.find (\(AlgAlt constr _ _) -> constr == c) alts) of
     Just a  -> Just (Right a)
-    Nothing -> Just (Left def)
+    Nothing -> case def of
+      Nothing -> Nothing
+      Just d' -> Just (Left d')
 lookupAlgebraicAlt (PrimAlts _ _) _ = Nothing
 
 rule_9_primitiveLiteralEval :: STGState -> Maybe STGState
@@ -397,7 +400,9 @@ lookupPrimitiveAlt :: Alts -> Literal -> Maybe (Either DefaultAlt PrimAlt)
 lookupPrimitiveAlt (PrimAlts alts def) k =
   case (L.find (\(PrimAlt l _) -> l == k) alts) of
     Just a  -> Just (Right a)
-    Nothing -> Just (Left def)
+    Nothing -> case def of
+      Nothing -> Nothing
+      Just d' -> Just (Left d')
 lookupPrimitiveAlt (AlgAlts _ _) _ = Nothing
 
 -- extended rule 14 that can handle all four combinations of
@@ -482,3 +487,28 @@ rule_17a_missingArgUpdate s@(STGState { stgCode = Enter a
              }
   else Nothing
 rule_17a_missingArgUpdate _ = Nothing
+
+rules :: [STGState -> Maybe STGState]
+rules = [ rule_1_funcApp
+        , rule_2_enterNonUpdatable
+        , rule_3_let
+        , rule_4_case
+        , rule_5_constructorApp
+        , rule_6_7_8_algebraicMatch
+        , rule_9_primitiveLiteralEval
+        , rule_10_primitiveLiteralApp
+        , rule_11_12_13_primitiveMatch
+        , rule_14_primop
+        , rule_15_enterUpdatable
+        , rule_16_missingReturnUpdate
+        , rule_17a_missingArgUpdate
+        ]
+
+-- | Main evaluator
+-- Continue evaluating till no matching rules are
+-- found and then return the final state
+eval :: STGState -> STGState
+eval state =
+  case asum [ rule state | rule <- rules] of
+    Nothing -> state
+    Just state' -> eval state'
