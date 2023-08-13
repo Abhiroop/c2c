@@ -41,6 +41,17 @@ prog3 = M.fromList [("main", main_lf)]
     case_alts :: Alts
     case_alts = AlgAlts [] (Just (DefaultBound "y" (AppF "y" [])))
 
+{- main = let f x = x + 5
+           in f 3
+-}
+prog4 :: Program
+prog4 = M.fromList [("main", main_lf)]
+  where
+    main_lf   = LambdaForm [] Updatable [] (Let let_binds let_expr)
+    let_binds =
+      M.fromList [("f", LambdaForm [] NotUpdatable ["x"]
+                        (AppP PlusOp (Var "x") (Lit 5)))]
+    let_expr  = AppF "f" [Lit 3]
 
 prog10 :: Program
 prog10 = M.fromList [ ("map", map_lf)
@@ -79,7 +90,7 @@ prog10 = M.fromList [ ("map", map_lf)
 
 testSuite :: IO ()
 testSuite
-  | result = putStrLn "All tests passed"
+  | result    = putStrLn "All tests passed"
   | otherwise = putStrLn "Some failures"
   where
     result =
@@ -88,4 +99,5 @@ testSuite
       | (p, res) <- [ (prog1, ReturnInt 5)
                     , (prog2, ReturnInt 25)
                     , (prog3, ReturnInt 55)
+                    , (prog4, ReturnInt 8)
                     ]]
