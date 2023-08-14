@@ -66,23 +66,43 @@ type BoundVar = Var
 
 type Literal = Integer -- these are unboxed
 
-data Atom = Var Var | Lit Literal deriving (Show, Eq)
+data Atom = Var Var | Lit Literal deriving Eq
+
+instance Show Atom where
+  show (Var var) = show var
+  show (Lit lit) = show lit
+
 
 type Binds = M.Map Var LambdaForm
 
 data LambdaForm =
   LambdaForm [FreeVar] UpdateFlag [BoundVar] Expr
-  deriving (Show, Eq)
+  deriving Eq
+
+instance Show LambdaForm where
+  show (LambdaForm freevars u boundvars expr) =
+    "λ " <> show freevars <> " " <> show u <> " " <>
+    show boundvars <> ". " <> show expr
 
 data UpdateFlag = Updatable
                 | NotUpdatable
-                deriving (Show, Eq)
+                deriving Eq
+
+instance Show UpdateFlag where
+  show Updatable = "U"
+  show NotUpdatable = "NU"
 
 data PrimOp = PlusOp
             | MinusOp
             | MulOp
             | DivOp
-            deriving (Show, Eq)
+            deriving Eq
+
+instance Show PrimOp where
+  show PlusOp  = "+"
+  show MinusOp = "-"
+  show MulOp   = "*"
+  show DivOp   = "/"
 
 data Expr = Let    Binds  Expr
           | LetRec Binds  Expr
@@ -233,7 +253,6 @@ malloc h = MemAddr (maddr + 1)
     (MemAddr maddr) = fst (M.findMax h)
 
 --------------------- STATE TRANSITION RULES --------------------
-
 rule_1_funcApp :: STGState -> Maybe STGState
 rule_1_funcApp s@(STGState { stgCode = Eval (AppF f xs) locals
                            , stgArgStack  = argStack
@@ -512,3 +531,12 @@ eval state =
   case asum [ rule state | rule <- rules] of
     Nothing -> state
     Just state' -> eval state'
+
+evalDebug :: STGState -> IO STGState
+evalDebug state = do
+  putStrLn "================"
+  putStrLn $ show state
+  putStrLn "================"
+  case asum [ rule state | rule <- rules] of
+    Nothing -> return state
+    Just state' -> evalDebug state'
