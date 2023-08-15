@@ -253,41 +253,106 @@ prog9 = M.fromList [ ("list", list_lf)
       (AppF "sum" [Var "list", Lit 0])
 
 
+{-  list = [1, 2]
 
+
+    plus_one x = x + 1
+
+    map f [] = []
+    map f (x:xs) = f x : (map f xs)
+
+    sum [] res = res
+    sum (x:xs) res = sum xs (res + x)
+
+    main = sum (map plus_one list)
+
+    ==
+
+    list = letrec nil  = Nil
+                   l1  = Cons 2 nil
+               in Cons 1 l1
+
+    plus_one = \x -> x + 1
+
+    map = \f l -> case l of
+                    Nil -> Nil
+                    Cons x xs ->
+                       case (f x) of
+                         y -> case (map f xs) of
+                                r -> y : r
+
+    sum = \l res -> case l of
+                        Nil -> res
+                        Cons x xs ->
+                           case (res + x) of
+                              y -> sum xs y
+
+    main = case (map plus_one list) of
+                 z -> sum z
+
+
+-}
 prog10 :: Program
-prog10 = M.fromList [ ("map", map_lf)
-                    , ("list", list_lf)
+prog10 = M.fromList [ ("list", list_lf)
                     , ("plus_one", plus_one_lf)
+                    , ("map", map_lf)
+                    , ("sum", sum_lf)
                     , ("main", mainExpr)
                     ]
   where
-    map_lf = LambdaForm [] NotUpdatable ["f", "xs"] case_expr
-    case_expr = Case (AppF "xs" []) (AlgAlts [alt1, alt2] Nothing)
+    list_lf = LambdaForm [] Updatable [] (LetRec let_binds let_expr)
+    let_binds =
+      M.fromList [ ("nil", LambdaForm [] NotUpdatable []
+                           (AppC (Constr "Nil") []))
+                 , ("l1" , LambdaForm ["nil"] NotUpdatable []
+                           (AppC (Constr "Cons") [Lit 2, Var "nil"]))
+                 ]
+    let_expr  = (AppC (Constr "Cons") [Lit 1, Var "l1"])
+
+    plus_one_lf =
+      LambdaForm [] NotUpdatable ["x"] (AppP PlusOp (Var "x") (Lit 1))
+
+    map_lf = LambdaForm [] NotUpdatable ["f", "l"] case_expr
+    case_expr = Case (AppF "l" []) (AlgAlts [alt1, alt2] Nothing)
     alt1 = AlgAlt nil_constr [] (AppC nil_constr [])
-    alt2 = AlgAlt cons_constr ["y", "ys"] let_expr
-    let_expr = Let let_binds (AppC cons_constr [Var "fy", Var "mfy"])
-    let_binds = M.insert "mfy" lf2 (M.insert "fy" lf1 M.empty)
-    lf1 = LambdaForm ["f", "y"] Updatable [] (AppF "f" [Var "y"])
-    lf2 = LambdaForm ["f", "ys"] Updatable [] (AppF "map" [Var "f", Var "ys"])
+    alt2 =
+      AlgAlt cons_constr ["x", "xs"]
+       (Case (AppF "f" [Var "x"])
+        (PrimAlts []
+         (Just
+          (DefaultBound "y"
+           (Case (AppF "map" [Var "f", Var "xs"])
+            (AlgAlts []
+             (Just
+              (DefaultBound "r"
+               (AppC cons_constr [Var "y", Var "r"])
+              )
+             )
+            )
+           )
+          )
+         )
+        )
+       )
     nil_constr  = Constr "Nil"
     cons_constr = Constr "Cons"
 
-    list_lf = LambdaForm [] Updatable [] let_expr_2
-    let2_binds = M.fromList [ ("one", one_lf)
-                            , ("two", two_lf)
-                            , ("nil", nil_lf)
-                            , ("temp", temp_lf)
-                            ]
-    one_lf = LambdaForm [] Updatable [] (LitE 1)
-    two_lf = LambdaForm [] Updatable [] (LitE 2)
-    nil_lf = LambdaForm [] Updatable [] (AppC nil_constr [])
-    temp_lf = LambdaForm [] Updatable [] (AppC cons_constr [Var "two", Var "nil"])
-    let_expr_2 = Let let2_binds (AppC cons_constr [Var "one", Var "temp"])
+    sum_lf = LambdaForm [] NotUpdatable ["l", "res"] case_sum_expr
+    case_sum_expr = Case (AppF "l" []) (AlgAlts [alts1, alts2] Nothing)
+    alts1 = AlgAlt (Constr "Nil") [] (AppF "res" [])
+    alts2 =
+      AlgAlt (Constr "Cons") ["x", "xs"]
+      (Case (AppP PlusOp (Var "res") (Var "x"))
+        (PrimAlts []
+         (Just
+          (DefaultBound "y" (AppF "sum" [(Var "xs"), (Var "y")])))))
 
-
-    plus_one_lf = LambdaForm [] NotUpdatable ["x"] (AppP PlusOp (Var "x") (Lit 1))
     -- map and list are global constants
-    mainExpr = LambdaForm [] Updatable [] (AppF "map" [Var "plus_one", Var "list"])
+    mainExpr = LambdaForm [] Updatable []
+      (Case (AppF "map" [Var "plus_one", Var "list"])
+       (AlgAlts []
+        (Just (DefaultBound "z" (AppF "sum" [Var "z", Lit 0])))))
+
 
 testSuite :: IO ()
 testSuite
@@ -306,4 +371,5 @@ testSuite
                     , (prog7, ReturnInt 3)
                     , (prog8, ReturnInt 3)
                     , (prog9, ReturnInt 3)
+                    , (prog10, ReturnInt 5)
                     ]]
