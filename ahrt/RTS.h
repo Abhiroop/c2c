@@ -38,7 +38,7 @@ typedef size_t   WORD;
 
 typedef void* code_label_t;
 
-typedef UINT ptr_t; // represents a heap pointer
+typedef UINT ptr_t; // represents an STG heap pointer
 
 
 typedef struct {
