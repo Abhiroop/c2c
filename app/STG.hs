@@ -31,6 +31,9 @@ STG --> CHERI-C --> CHERI
 STG --> LLVM    --> CHERI
 STG             --> CHERI
 
+`LetNoEscape` in STG explained : https://web.archive.org/web/20160713042208/http://lambda.jstolarek.com/2013/10/let-no-escape/
+
+
 -}
 
 
