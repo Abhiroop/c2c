@@ -47,11 +47,16 @@ typedef struct {
   code_label_t scavenge_code;
 } info_table_t;
 
+
 typedef struct {
   info_table_t *info_table_ptr;
   ptr_t        *heap_ptrs; // array of pointers; GC should follow this
   WORD         *non_ptrs;  // non pointer words
 } stg_closure_t;
+
+// we do not use a tag to differentiate an indirection and standard
+// closure as the action of entering the closure is the same;
+// only the steps to enter are different;
 
 typedef struct {
   stg_closure_t *closures;

@@ -33,6 +33,7 @@ static inline code_label_t label_call(code_label_t addr){
   return result;
 }
 
+// ENTER for standard closures
 code_label_t enter(STG *stg_inst, ptr_t cl_addr){
   stg_inst->stg_node = cl_addr;
   code_label_t entry_addr =
@@ -41,6 +42,17 @@ code_label_t enter(STG *stg_inst, ptr_t cl_addr){
   code_label_t res = label_call(entry_addr);
   return res;
 }
+
+// ENTER for indirection clsoures
+code_label_t enter_indirection(STG *stg_inst, ptr_t cl_addr){
+  stg_inst->stg_node = cl_addr;
+  ptr_t ptr_to_next_closure =
+    stg_inst->stg_heap.closures[stg_inst->stg_node].heap_ptrs[0];
+  code_label_t res = enter(stg_inst, ptr_to_next_closure);
+
+  return res;
+}
+
 
 void initSTG(STG *stg){
   // initialise the stacks, heap etc
