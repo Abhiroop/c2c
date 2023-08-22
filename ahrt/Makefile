@@ -11,4 +11,4 @@ ahrt: $(OBJ)
 	$(CC) -o $@ $^ $(CFLAGS)
 
 clean:
-	rm -rf ahrt $(OBJ)
+	rm -rf ahrt $(OBJ) .RTS.h.~undo-tree~ .RTS.c.~undo-tree~

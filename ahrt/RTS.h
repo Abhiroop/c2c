@@ -45,6 +45,9 @@ typedef struct {
   code_label_t standard_entry_code;
   code_label_t evacuation_code;
   code_label_t scavenge_code;
+  UINT         other_info; // first 32 bits used to store the total pointer words
+                           // next 32 bits store the number of non-pointer words
+                           // this is the entire closure layout information Pg 49
 } info_table_t;
 
 
@@ -64,7 +67,7 @@ typedef struct {
 // associative array. We initialise a large enough array
 // and the program crashes if this array is full;
 // the actual implementation should look like the
-// heap_t given below;
+// heap_t given further below;
 typedef struct {
   stg_closure_t *closures;
 } heap_t;
@@ -76,12 +79,19 @@ typedef struct {
 /*   // size of heap_cells array == size of heap_flags array */
 /* } heap_t */
 
+
 typedef ptr_t Node; // points to the closure under evaluation
 
 // the Spineless Tagless G-machine
 typedef struct {
   heap_t stg_heap;
+  ptr_t *stack_a_pointers;
+  WORD  *stack_b_non_ptrs;
   Node   stg_node;
+  ptr_t  Hp; // unused in the dummy heap
+  ptr_t  HLimit; // unused in the dummy heap
+  ptr_t  SpA;
+  ptr_t  SpB;
 } STG;
 
 
