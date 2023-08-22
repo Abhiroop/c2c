@@ -53,15 +53,28 @@ typedef struct {
   ptr_t        *heap_ptrs; // array of pointers; GC should follow this
   WORD         *non_ptrs;  // non pointer words
 } stg_closure_t;
-
 // we do not use a tag to differentiate an indirection and standard
 // closure as the action of entering the closure is the same;
 // only the steps to enter are different;
 
+
+
+// Note this is a dummy heap that exactly mimics
+// the heap of the operational semantics -- basically an
+// associative array. We initialise a large enough array
+// and the program crashes if this array is full;
+// the actual implementation should look like the
+// heap_t given below;
 typedef struct {
   stg_closure_t *closures;
 } heap_t;
 
+// an actual heap should be like
+/* typedef struct { */
+/*   WORD *heap_cells; // an array of 64 bit words */
+/*   uint8_t *heap_flags; // this could be used to store metadata like mark bit */
+/*   // size of heap_cells array == size of heap_flags array */
+/* } heap_t */
 
 typedef ptr_t Node; // points to the closure under evaluation
 
